@@ -1,0 +1,101 @@
+{
+  "$schema_version": 1,
+  "$comment": "Declarative source of truth for the OpenClaw runtime layer. Edit + redeploy to apply. Read by bootstrap.sh.",
+
+  "wrappers": [
+    {
+      "name": "mcporter",
+      "description": "Inject --config so mcporter always reads the persistent mcporter.json on /data",
+      "target": "/data/npm/lib/node_modules/mcporter/dist/cli.js",
+      "interpreter": "node",
+      "args": ["--config", "/data/.openclaw/mcporter.json"]
+    },
+    {
+      "name": "gws",
+      "description": "Inject default Google Workspace credentials path",
+      "target": "/data/npm/bin/gws-real",
+      "env": {
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE": "/data/.openclaw/credentials/google-ads-sa.json"
+      }
+    }
+  ],
+
+  "symlinks": [
+    {
+      "from": "/app/config/mcporter.json",
+      "to": "/data/.openclaw/mcporter.json",
+      "description": "Default mcporter config path expected by /app — points at persistent copy"
+    }
+  ],
+
+  "assertions": {
+    "required_binaries": [
+      "node", "npm", "pnpm", "openclaw",
+      "jq", "rg", "ffmpeg", "zip", "unzip", "git", "curl",
+      "convert", "pdftotext",
+      "mcporter", "gws",
+      "google-ads-mcp", "attio-mcp-server"
+    ],
+    "required_files": [
+      "/data/.openclaw/openclaw.json",
+      "/data/.openclaw/mcporter.json",
+      "/data/.openclaw/cron/jobs.json",
+      "/data/.openclaw/credentials/google-ads-sa.json",
+      "/data/.openclaw/devices/paired.json"
+    ],
+    "openclaw_config": {
+      "min_agents": 7,
+      "required_agent_ids": [
+        "main", "accountant", "bdm", "automation-expert",
+        "legal", "marketing", "growth-marketing"
+      ],
+      "required_channels": ["telegram", "slack"]
+    }
+  },
+
+  "snapshot": {
+    "$comment": "Tar.gz to /data/snapshots/preboot-${commit}.tar.gz before each deploy. Keep last N.",
+    "paths": [
+      "/data/.openclaw/openclaw.json",
+      "/data/.openclaw/mcporter.json",
+      "/data/.openclaw/cron/jobs.json",
+      "/data/.openclaw/credentials",
+      "/data/.openclaw/custom-skills",
+      "/data/.openclaw/gws-skills",
+      "/data/.openclaw/memory",
+      "/data/.openclaw/devices",
+      "/data/.openclaw/identity",
+      "/data/.openclaw/telegram",
+      "/data/.openclaw/logs/config-audit.jsonl"
+    ],
+    "keep_last": 10
+  },
+
+  "maintenance": {
+    "prune_backups": {
+      "$comment": "Stop accumulating openclaw.json.bak* clutter — keep newest 3",
+      "pattern": "/data/.openclaw/openclaw.json.bak*",
+      "keep": 3
+    }
+  },
+
+  "documentation": {
+    "$comment": "Informational only — used by bootstrap to print a deploy summary. Not enforced.",
+    "apt_required_at_build": [
+      "ripgrep", "ffmpeg", "zip", "unzip", "poppler-utils",
+      "imagemagick", "libmagickwand-dev",
+      "jq", "git", "curl", "wget", "ca-certificates",
+      "build-essential", "pkg-config",
+      "libssl-dev", "libsqlite3-dev", "libpq-dev",
+      "libffi-dev", "libyaml-dev",
+      "python3", "python3-venv", "python3-dev", "python3-pip",
+      "tini"
+    ],
+    "known_unmanaged_binaries": [
+      {
+        "path": "/data/npm/bin/gog",
+        "note": "User-uploaded 25 MB binary (UID 501). Not managed by manifest; persists naturally on /data."
+      }
+    ]
+  }
+}

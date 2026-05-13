@@ -43,12 +43,23 @@ RUN pnpm ui:install && pnpm ui:build
 FROM node:22-bookworm
 ENV NODE_ENV=production
 
+# Runtime system layer — declarative, persistent across deploys.
+# Anything not in this list WILL be wiped on the next deploy.
+# Grouped by purpose:
+#   - Core/PID 1:           ca-certificates tini curl wget git
+#   - Python for MCP:       python3 python3-venv python3-dev python3-pip
+#   - Bootstrap reconciler: jq
+#   - Skill tooling:        ripgrep ffmpeg zip unzip bzip2 xz-utils poppler-utils imagemagick libmagickwand-dev
+#   - Native compile:       build-essential pkg-config libssl-dev libsqlite3-dev libpq-dev libffi-dev libyaml-dev
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    ca-certificates \
-    tini \
-    python3 \
-    python3-venv \
+    ca-certificates tini curl wget git \
+    python3 python3-venv python3-dev python3-pip \
+    jq \
+    ripgrep ffmpeg zip unzip bzip2 xz-utils \
+    poppler-utils imagemagick libmagickwand-dev \
+    build-essential pkg-config \
+    libssl-dev libsqlite3-dev libpq-dev libffi-dev libyaml-dev \
   && rm -rf /var/lib/apt/lists/*
 
 # `openclaw update` expects pnpm. Provide it in the runtime image.
@@ -61,7 +72,7 @@ ENV NPM_CONFIG_PREFIX=/data/npm
 ENV NPM_CONFIG_CACHE=/data/npm-cache
 ENV PNPM_HOME=/data/pnpm
 ENV PNPM_STORE_DIR=/data/pnpm-store
-ENV PATH="/data/npm/bin:/data/pnpm:${PATH}"
+ENV PATH="/data/.openclaw/bin:/data/npm/bin:/data/pnpm:${PATH}"
 
 WORKDIR /app
 
@@ -78,6 +89,12 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"'
 
 COPY src ./src
 
+# Manifest-driven bootstrap: reconciles wrappers/symlinks on every container start.
+# See bootstrap.sh and manifest.json for the source of truth.
+COPY manifest.json /app/manifest.json
+COPY bootstrap.sh /usr/local/bin/openclaw-bootstrap
+RUN chmod +x /usr/local/bin/openclaw-bootstrap
+
 # The wrapper listens on $PORT.
 # IMPORTANT: Do not set a default PORT here.
 # Railway injects PORT at runtime and routes traffic to that port.
@@ -85,5 +102,6 @@ COPY src ./src
 EXPOSE 8080
 
 # Ensure PID 1 reaps zombies and forwards signals.
-ENTRYPOINT ["tini", "--"]
+# Chain: tini (PID 1) -> openclaw-bootstrap (reconcile, then exec) -> app
+ENTRYPOINT ["tini", "--", "/usr/local/bin/openclaw-bootstrap"]
 CMD ["node", "src/server.js"]
