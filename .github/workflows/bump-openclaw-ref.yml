@@ -1,5 +1,8 @@
-name: Bump OpenClaw release ref
+name: Notify on new OpenClaw release
 
+# Scheduled workflows only run from the repo's DEFAULT branch (main), so this file lives on main.
+# Railway deploys the `feat/elegant-bootstrap` branch, so we open the PR against THAT branch.
+# Merging the PR bumps the Dockerfile ARG -> Railway rebuilds from the new tag (repo = source of truth).
 on:
   schedule:
     - cron: "23 9 * * *" # daily 09:23 UTC
@@ -10,34 +13,56 @@ permissions:
   pull-requests: write
 
 jobs:
-  bump:
+  notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout deployed branch
         uses: actions/checkout@v4
+        with:
+          ref: feat/elegant-bootstrap
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Bump Dockerfile OPENCLAW_GIT_REF if needed
+      - name: Detect newer OpenClaw release (bumps Dockerfile ARG if one exists)
+        id: bump
         run: node scripts/bump-openclaw-ref.mjs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create PR
+      - name: Open PR against the deployed branch
+        if: steps.bump.outputs.updated == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "chore: bump OPENCLAW_GIT_REF to latest release"
-          title: "chore: bump OPENCLAW_GIT_REF to latest OpenClaw release"
-          body: |
-            Automated update of the default OpenClaw build ref (`OPENCLAW_GIT_REF`) to the latest upstream release tag.
-
-            This keeps the Railway template stable-by-default while staying current.
+          base: feat/elegant-bootstrap
           branch: chore/bump-openclaw-ref
           delete-branch: true
+          commit-message: "chore: bump OPENCLAW_GIT_REF to ${{ steps.bump.outputs.latest }}"
+          title: "🔔 OpenClaw ${{ steps.bump.outputs.latest }} available (deployed: ${{ steps.bump.outputs.current }})"
           labels: |
             automated
             dependencies
+          body: |
+            A newer **stable** OpenClaw release is available.
+
+            | | Version |
+            |---|---|
+            | Latest stable | `${{ steps.bump.outputs.latest }}` |
+            | Currently deployed (Dockerfile pin) | `${{ steps.bump.outputs.current }}` |
+
+            📝 Release notes: ${{ steps.bump.outputs.notes_url }}
+
+            ---
+            **Merging this PR upgrades the live instance.** Railway rebuilds `feat/elegant-bootstrap`
+            from the new tag (the repo Dockerfile is the source of truth for the OpenClaw version).
+
+            Before you merge:
+            1. Skim the release notes above for breaking changes.
+            2. Merge → Railway auto-deploys.
+            3. Verify: `openclaw agent --agent main -m "reply PONG"`, and check Slack + Telegram.
+            4. Rollback if needed: revert this PR (or reset the Dockerfile `ARG OPENCLAW_GIT_REF`) and redeploy.
+
+            _Automated by `.github/workflows/bump-openclaw-ref.yml` (runs daily; only opens a PR when a newer release exists)._
