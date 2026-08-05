@@ -20,9 +20,10 @@ RUN corepack enable
 
 WORKDIR /openclaw
 
-# Pin to a known-good ref (tag/branch). Override in Railway template settings if needed.
+# Pin to a known-good ref (tag/branch). This is the SOURCE OF TRUTH for the OpenClaw version
+# (the Railway OPENCLAW_GIT_REF variable override was removed 2026-08-05). Bump via PR + merge.
 # Using a released tag avoids build breakage when `main` temporarily references unpublished packages.
-ARG OPENCLAW_GIT_REF=v2026.3.8
+ARG OPENCLAW_GIT_REF=v2026.2.13
 RUN git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" https://github.com/openclaw/openclaw.git .
 
 # Patch: relax version requirements for packages that may reference unpublished versions.
