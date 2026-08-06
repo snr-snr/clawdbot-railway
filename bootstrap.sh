@@ -203,7 +203,10 @@ if [ -f /data/.openclaw/openclaw.json ]; then
 fi
 
 if [ "${#missing_bins[@]}" -gt 0 ];   then errors+=("missing binaries: ${missing_bins[*]}"); fi
-if [ "${#missing_files[@]}" -gt 0 ];  then errors+=("missing files: ${missing_files[*]}"); fi
+# Missing runtime files are NON-FATAL: OpenClaw upgrades can migrate state files
+# (e.g. cron/jobs.json, devices/paired.json) into its SQLite state DB, and a stale
+# assertion must not crash-loop the whole bot. Warn instead of failing the boot.
+if [ "${#missing_files[@]}" -gt 0 ];  then warnings+=("missing files (non-fatal, may be migrated into state DB): ${missing_files[*]}"); fi
 if [ "${#cfg_errors[@]}" -gt 0 ];     then errors+=("config errors: ${cfg_errors[*]}"); fi
 
 if [ "${#errors[@]}" -gt 0 ]; then
