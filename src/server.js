@@ -1329,25 +1329,15 @@ proxy.on("error", (err, _req, res) => {
 });
 
 // --- Dashboard password protection ---
-// Require the same SETUP_PASSWORD for the entire Control UI dashboard,
-// not just the /setup routes.  Healthcheck is excluded so Railway probes work.
-function requireDashboardAuth(req, res, next) {
-  if (req.path === "/healthz" || req.path === "/setup/healthz") return next();
-  if (req.path.startsWith("/hooks")) return next(); // allow OpenClaw webhook endpoints to bypass dashboard auth
-  if (!SETUP_PASSWORD) return next(); // no password configured → open
-  const header = req.headers.authorization || "";
-  const [scheme, encoded] = header.split(" ");
-  if (scheme !== "Basic" || !encoded) {
-    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Dashboard"');
-    return res.status(401).send("Auth required");
-  }
-  const decoded = Buffer.from(encoded, "base64").toString("utf8");
-  const idx = decoded.indexOf(":");
-  const password = idx >= 0 ? decoded.slice(idx + 1) : "";
-  if (password !== SETUP_PASSWORD) {
-    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Dashboard"');
-    return res.status(401).send("Invalid password");
-  }
+// The Control UI (Gateway Dashboard) authenticates via the GATEWAY TOKEN — a
+// challenge-response over the WebSocket enforced by OpenClaw (2026.7.1+). The wrapper
+// used to ALSO gate the whole Control UI behind HTTP Basic auth (SETUP_PASSWORD), but
+// that double-auth only caused repeated Basic-auth prompts in the SPA (every XHR/reload
+// re-challenged) and added nothing: the gateway's HTTP endpoints ("/", "/chat", "/health")
+// serve only the public UI shell, and all real access requires the gateway token.
+// So the Control UI is now pass-through here; the /setup admin console stays protected
+// by requireSetupAuth (unchanged). Removed the Basic-auth gate 2026-08-06.
+function requireDashboardAuth(_req, _res, next) {
   return next();
 }
 
