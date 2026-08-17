@@ -28,6 +28,27 @@
     }
   ],
 
+  "secrets": {
+    "$comment": "Resolved at boot from 1Password with the `op` CLI, using a service-account token in the OP_SERVICE_ACCOUNT_TOKEN env var (set it as a Railway variable — never commit it). INERT by design: with no token, or if a fetch fails, bootstrap leaves the existing on-disk secrets exactly as they are and only warns. It never fails the boot and never writes an empty value over a good one, so a 1Password outage cannot take the bot down.",
+    "enabled": true,
+    "vault": "OpenClaw",
+    "env_file": "/data/.openclaw/.env",
+    "items": [
+      {
+        "name": "OPENAI_API_KEY",
+        "ref": "op://OpenClaw/OpenAI API/credential",
+        "dest": "env"
+      },
+      {
+        "name": "SHOPIFY_TOKEN_BAZAA",
+        "ref": "op://OpenClaw/Shopify Bazaa/credential",
+        "dest": "env_file",
+        "path": "/data/.openclaw/credentials/shopify/tokens.env",
+        "mode": "600"
+      }
+    ]
+  },
+
   "provisioned": [
     {
       "name": "shopify",

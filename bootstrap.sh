@@ -266,7 +266,82 @@ while read -r prov; do
 done < <(jq -c '.provisioned[]?' "$MANIFEST")
 
 # ---------------------------------------------------------------------------
-# 5. Maintenance: prune *.bak clutter
+# 5. Resolve secrets from 1Password (optional, fail-soft)
+#
+# Contract, in order of importance:
+#   1. Never take the bot down. No path here is fatal.
+#   2. Never replace a working secret with a broken one. A value is only written
+#      after a successful, non-empty fetch.
+#   3. Do nothing at all unless OP_SERVICE_ACCOUNT_TOKEN is set, so this ships
+#      safely before the 1Password side exists.
+#
+# Secrets land in the ordinary places OpenClaw already reads (its .env and the
+# usual credential files) — nothing downstream knows 1Password is involved.
+# ---------------------------------------------------------------------------
+sec_enabled=$(jq -r '.secrets.enabled // false' "$MANIFEST")
+if [ "$sec_enabled" = "true" ]; then
+  if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+    log "secrets: OP_SERVICE_ACCOUNT_TOKEN not set — skipping (on-disk secrets untouched)"
+  elif ! command -v op >/dev/null 2>&1; then
+    warnings+=("secrets: op CLI missing from image — skipping")
+  else
+    sec_ok=0; sec_fail=0
+
+    # Upsert KEY=value in a KEY=value file, preserving other keys and perms.
+    upsert_env_line() {
+      local file="$1" key="$2" val="$3" mode="${4:-600}" tmp
+      tmp="${file}.tmp.$$"
+      mkdir -p "$(dirname "$file")"
+      { [ -f "$file" ] && grep -v "^${key}=" "$file" 2>/dev/null; printf '%s=%s\n' "$key" "$val"; } > "$tmp"
+      chmod "$mode" "$tmp" && mv "$tmp" "$file"
+    }
+
+    while read -r item; do
+      [ -z "$item" ] && continue
+      s_name=$(echo "$item" | jq -r '.name')
+      s_ref=$(echo  "$item" | jq -r '.ref')
+      s_dest=$(echo "$item" | jq -r '.dest // "env"')
+      s_path=$(echo "$item" | jq -r '.path // empty')
+      s_mode=$(echo "$item" | jq -r '.mode // "600"')
+
+      # Fetch first, into a variable. Only touch disk on success.
+      if ! s_val=$(op read --no-newline "$s_ref" 2>/dev/null) || [ -z "$s_val" ]; then
+        warnings+=("secrets: could not read $s_name from 1Password — keeping existing value")
+        # Log too: a silent secret failure should be visible in the deploy log,
+        # not only in bootstrap.last.json.
+        log "secrets: WARN could not read $s_name ($s_ref) — keeping existing value"
+        sec_fail=$((sec_fail+1))
+        continue
+      fi
+
+      case "$s_dest" in
+        env)
+          upsert_env_line "$(jq -r '.secrets.env_file' "$MANIFEST")" "$s_name" "$s_val" 600 ;;
+        env_file)
+          [ -n "$s_path" ] || { warnings+=("secrets: $s_name has dest=env_file but no path"); continue; }
+          upsert_env_line "$s_path" "$s_name" "$s_val" "$s_mode" ;;
+        file)
+          [ -n "$s_path" ] || { warnings+=("secrets: $s_name has dest=file but no path"); continue; }
+          mkdir -p "$(dirname "$s_path")"
+          printf '%s' "$s_val" > "${s_path}.tmp.$$" \
+            && chmod "$s_mode" "${s_path}.tmp.$$" && mv "${s_path}.tmp.$$" "$s_path" ;;
+        *)
+          warnings+=("secrets: $s_name has unknown dest '$s_dest'"); continue ;;
+      esac
+      unset s_val
+      sec_ok=$((sec_ok+1))
+    done < <(jq -c '.secrets.items[]?' "$MANIFEST")
+
+    if [ "$sec_ok" -gt 0 ]; then
+      actions+=("secrets: resolved $sec_ok from 1Password")
+      log "secrets: resolved $sec_ok from 1Password ($sec_fail failed)"
+    fi
+    [ "$sec_fail" -gt 0 ] && warnings+=("secrets: $sec_fail item(s) failed to resolve — previous values kept")
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Maintenance: prune *.bak clutter
 # ---------------------------------------------------------------------------
 prune_pattern=$(jq -r '.maintenance.prune_backups.pattern // empty' "$MANIFEST")
 prune_keep=$(jq -r '.maintenance.prune_backups.keep // 3' "$MANIFEST")
@@ -282,7 +357,7 @@ if [ -n "$prune_pattern" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Assertions — fail loud if anything's missing
+# 7. Assertions — fail loud if anything's missing
 # ---------------------------------------------------------------------------
 missing_bins=()
 while read -r b; do
@@ -338,6 +413,6 @@ write_report "ok"
 log "reconcile complete: ${#actions[@]} action(s), ${#warnings[@]} warning(s), 0 error(s)"
 
 # ---------------------------------------------------------------------------
-# 7. Hand off to the app (tini stays as PID 1)
+# 8. Hand off to the app (tini stays as PID 1)
 # ---------------------------------------------------------------------------
 exec "$@"

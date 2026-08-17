@@ -104,6 +104,17 @@ RUN chmod +x /usr/local/bin/openclaw-bootstrap
 COPY payloads /app/payloads
 RUN chmod +x /app/payloads/shopify/bin/*
 
+# 1Password CLI — lets bootstrap resolve secrets from a service-account vault at
+# boot instead of keeping them in plaintext on /data. Needs >= 2.18 for service
+# accounts. Inert unless OP_SERVICE_ACCOUNT_TOKEN is set (see manifest.secrets).
+ARG OP_CLI_VERSION=2.31.1
+RUN curl -sSfLo /tmp/op.zip \
+      "https://cache.agilebits.com/dist/1P/op2/pkg/v${OP_CLI_VERSION}/op_linux_amd64_v${OP_CLI_VERSION}.zip" \
+  && unzip -o /tmp/op.zip op -d /usr/local/bin \
+  && chmod +x /usr/local/bin/op \
+  && rm -f /tmp/op.zip \
+  && op --version
+
 # The wrapper listens on $PORT.
 # IMPORTANT: Do not set a default PORT here.
 # Railway injects PORT at runtime and routes traffic to that port.
