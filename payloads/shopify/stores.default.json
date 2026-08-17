@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "default_api_version": "2025-04",
+  "_comment": "Non-secret registry of client Shopify stores. Tokens live in tokens.env (chmod 600), never here. Add a client by copying a block; the slug is what agents pass on the command line.",
+  "stores": {
+    "bazaa": {
+      "label": "Bazaa",
+      "domain": "bazaatest.myshopify.com",
+      "storefront": "bazaa.com.au",
+      "admin_handle": "bazaahome",
+      "api_version": "2025-04",
+      "token_env": "SHOPIFY_TOKEN_BAZAA",
+      "app": "SNR Growth Automations (custom distribution)",
+      "scopes": [
+        "write_products",
+        "read_inventory",
+        "read_metaobjects",
+        "read_metaobject_definitions"
+      ],
+      "no_scope": [
+        "orders",
+        "customers",
+        "draft_orders",
+        "fulfillments",
+        "discounts",
+        "analytics",
+        "checkout",
+        "payments"
+      ],
+      "write_allowed": false,
+      "notes": [
+        "~9,500 active products.",
+        "Admin URL for a product: https://admin.shopify.com/store/bazaahome/products/<numeric id>",
+        "Product metafields (namespace `custom`): category, sub_category_1, sub_category_2, height, width, depth (cm), state, suburb_and_postcode, google_merchant_shipping_rate (JSON, written by the daily shipping-sync job).",
+        "Vendor = the product `vendor` field; vendor detail lives in shop metafields namespace `garnet-vendors` (seller addresses at shipping.shippo.shipFromAddress).",
+        "Variant weight is variant.inventoryItem.measurement.weight — variant.weight does not exist in 2025-04.",
+        "Same token is used by the shipping-sync GitHub Action; it stays valid until the app is uninstalled."
+      ]
+    }
+  }
+}

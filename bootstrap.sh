@@ -68,7 +68,13 @@ SNAP="${SNAPSHOT_DIR}/preboot-${COMMIT}.tar.gz"
 if [ ! -f "$SNAP" ]; then
   mapfile -t snap_paths < <(jq -r '.snapshot.paths[]?' "$MANIFEST")
   existing=()
-  for p in "${snap_paths[@]}"; do [ -e "$p" ] && existing+=("$p"); done
+  for p in "${snap_paths[@]}"; do
+    # Manifest paths may contain globs (e.g. /data/workspace-*/skills) so that
+    # per-agent workspaces are captured without listing every agent by hand.
+    # Unquoted expansion is intentional; these paths never contain spaces.
+    # shellcheck disable=SC2086
+    for m in $p; do [ -e "$m" ] && existing+=("$m"); done
+  done
   if [ "${#existing[@]}" -gt 0 ]; then
     if tar -czf "$SNAP" "${existing[@]}" 2>/dev/null; then
       sz=$(du -h "$SNAP" | cut -f1)
@@ -148,7 +154,119 @@ while read -r link; do
 done < <(jq -c '.symlinks[]?' "$MANIFEST")
 
 # ---------------------------------------------------------------------------
-# 4. Maintenance: prune *.bak clutter
+# 4. Reconcile provisioned payloads (image -> /data)
+#
+# Anything declared in .provisioned is restored from the image on every boot.
+# This is what makes a runtime capability (e.g. the Shopify layer) survive a
+# redeploy, an OpenClaw upgrade that rewrites workspaces, or a lost volume.
+#
+# Invariant preserved: this NEVER writes openclaw.json. Config remains
+# runtime-owned; we only assert on it further down.
+# ---------------------------------------------------------------------------
+CFG=/data/.openclaw/openclaw.json
+
+# Resolve an agent's workspace, honouring the agents.defaults.workspace
+# fallback (that is how "main" resolves to /data/workspace).
+agent_workspace() {
+  local id="$1"
+  [ -f "$CFG" ] || return 1
+  jq -r --arg id "$id" '
+    (.agents.defaults.workspace // "/data/workspace") as $def
+    | (.agents.list[]? | select(.id==$id) | (.workspace // .cwd // $def))
+  ' "$CFG" 2>/dev/null | head -1
+}
+
+while read -r prov; do
+  [ -z "$prov" ] && continue
+  pname=$(echo "$prov" | jq -r '.name')
+
+  # -- directories (created before files land in them)
+  while read -r d; do
+    [ -z "$d" ] && continue
+    dpath=$(echo "$d" | jq -r '.path'); dmode=$(echo "$d" | jq -r '.mode // "755"')
+    mkdir -p "$dpath" && chmod "$dmode" "$dpath"
+  done < <(echo "$prov" | jq -c '.ensure_dirs[]?')
+
+  # -- binaries (copy only when content differs, so boots stay quiet)
+  while read -r b; do
+    [ -z "$b" ] && continue
+    bsrc=$(echo "$b" | jq -r '.src'); bdest=$(echo "$b" | jq -r '.dest')
+    bmode=$(echo "$b" | jq -r '.mode // "755"')
+    if [ ! -f "$bsrc" ]; then
+      warnings+=("provision $pname: payload missing in image: $bsrc"); continue
+    fi
+    mkdir -p "$(dirname "$bdest")"
+    if ! cmp -s "$bsrc" "$bdest" 2>/dev/null; then
+      install -m "$bmode" "$bsrc" "$bdest"
+      actions+=("provision $pname: $bdest")
+      log "provision $pname: installed $bdest"
+    fi
+  done < <(echo "$prov" | jq -c '.binaries[]?')
+
+  # -- seed files (only when absent; never clobber live runtime state)
+  while read -r s; do
+    [ -z "$s" ] && continue
+    ssrc=$(echo "$s" | jq -r '.src'); sdest=$(echo "$s" | jq -r '.dest')
+    smode=$(echo "$s" | jq -r '.mode // "600"')
+    if [ -f "$ssrc" ] && [ ! -e "$sdest" ]; then
+      mkdir -p "$(dirname "$sdest")"
+      install -m "$smode" "$ssrc" "$sdest"
+      actions+=("provision $pname: seeded $sdest")
+      log "provision $pname: seeded $sdest"
+    fi
+  done < <(echo "$prov" | jq -c '.seed_files[]?')
+
+  # -- skill, copied into each target agent's own workspace
+  skill_src=$(echo "$prov" | jq -r '.agent_skill.src // empty')
+  skill_name=$(echo "$prov" | jq -r '.agent_skill.skill_name // empty')
+  if [ -n "$skill_src" ] && [ -n "$skill_name" ]; then
+    if [ ! -d "$skill_src" ]; then
+      warnings+=("provision $pname: skill payload missing in image: $skill_src")
+    else
+      while read -r aid; do
+        [ -z "$aid" ] && continue
+        ws=$(agent_workspace "$aid")
+        if [ -z "$ws" ] || [ "$ws" = "null" ]; then
+          warnings+=("provision $pname: no workspace for agent $aid"); continue
+        fi
+        dest="${ws}/skills/${skill_name}"
+        if ! diff -rq "$skill_src" "$dest" >/dev/null 2>&1; then
+          mkdir -p "$dest"
+          cp -R "$skill_src/." "$dest/"
+          actions+=("provision $pname: skill -> $dest")
+          log "provision $pname: skill -> $dest"
+        fi
+        # The skill is useless unless the agent lists it. We do not write config,
+        # so surface the drift instead.
+        if ! jq -e --arg id "$aid" --arg s "$skill_name" \
+             '.agents.list[] | select(.id==$id) | .skills // [] | index($s)' \
+             "$CFG" >/dev/null 2>&1; then
+          warnings+=("agent $aid does not list skill '$skill_name' in openclaw.json")
+        fi
+      done < <(echo "$prov" | jq -r '.agent_skill.agents[]?')
+    fi
+  fi
+
+  # -- credentials present? (tokens are never baked into the image)
+  if [ "$(echo "$prov" | jq -r '.assert_store_tokens // false')" = "true" ]; then
+    reg=/data/.openclaw/credentials/shopify/stores.json
+    toks=/data/.openclaw/credentials/shopify/tokens.env
+    if [ -f "$reg" ]; then
+      while read -r pair; do
+        [ -z "$pair" ] && continue
+        slug="${pair%%|*}"; envname="${pair##*|}"
+        if ! grep -q "^${envname}=" "$toks" 2>/dev/null && [ -z "${!envname:-}" ]; then
+          warnings+=("shopify store '$slug' has no token ($envname missing from tokens.env and env)")
+        fi
+      done < <(jq -r '.stores | to_entries[] |
+                 "\(.key)|\(.value.token_env // ("SHOPIFY_TOKEN_" + (.key | ascii_upcase)))"' \
+               "$reg" 2>/dev/null)
+    fi
+  fi
+done < <(jq -c '.provisioned[]?' "$MANIFEST")
+
+# ---------------------------------------------------------------------------
+# 5. Maintenance: prune *.bak clutter
 # ---------------------------------------------------------------------------
 prune_pattern=$(jq -r '.maintenance.prune_backups.pattern // empty' "$MANIFEST")
 prune_keep=$(jq -r '.maintenance.prune_backups.keep // 3' "$MANIFEST")
@@ -164,7 +282,7 @@ if [ -n "$prune_pattern" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Assertions — fail loud if anything's missing
+# 6. Assertions — fail loud if anything's missing
 # ---------------------------------------------------------------------------
 missing_bins=()
 while read -r b; do
@@ -220,6 +338,6 @@ write_report "ok"
 log "reconcile complete: ${#actions[@]} action(s), ${#warnings[@]} warning(s), 0 error(s)"
 
 # ---------------------------------------------------------------------------
-# 6. Hand off to the app (tini stays as PID 1)
+# 7. Hand off to the app (tini stays as PID 1)
 # ---------------------------------------------------------------------------
 exec "$@"

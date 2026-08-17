@@ -28,6 +28,37 @@
     }
   ],
 
+  "provisioned": [
+    {
+      "name": "shopify",
+      "description": "Client Shopify store access: shopify-admin CLI + the `shopify` skill, restored onto /data from the image on every boot so a redeploy, upgrade or lost volume cannot drop it. Tokens are NOT provisioned — they live only in /data/.openclaw/credentials/shopify/tokens.env (0600) or Railway variables.",
+      "binaries": [
+        {
+          "src": "/app/payloads/shopify/bin/shopify-admin",
+          "dest": "/data/npm/bin/shopify-admin",
+          "mode": "755"
+        }
+      ],
+      "agent_skill": {
+        "skill_name": "shopify",
+        "src": "/app/payloads/shopify/skill",
+        "agents": ["main", "growth-marketing", "bdm"]
+      },
+      "ensure_dirs": [
+        { "path": "/data/.openclaw/credentials/shopify", "mode": "700" }
+      ],
+      "seed_files": [
+        {
+          "src": "/app/payloads/shopify/stores.default.json",
+          "dest": "/data/.openclaw/credentials/shopify/stores.json",
+          "mode": "600",
+          "$comment": "Seeded ONLY if absent — never overwrites the live registry, which is where client stores are added at runtime."
+        }
+      ],
+      "assert_store_tokens": true
+    }
+  ],
+
   "assertions": {
     "required_binaries": [
       "node", "npm", "pnpm", "openclaw",
@@ -66,7 +97,9 @@
       "/data/.openclaw/devices",
       "/data/.openclaw/identity",
       "/data/.openclaw/telegram",
-      "/data/.openclaw/logs/config-audit.jsonl"
+      "/data/.openclaw/logs/config-audit.jsonl",
+      "/data/workspace/skills",
+      "/data/workspace-*/skills"
     ],
     "keep_last": 10
   },

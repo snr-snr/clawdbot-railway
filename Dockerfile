@@ -96,6 +96,14 @@ COPY manifest.json /app/manifest.json
 COPY bootstrap.sh /usr/local/bin/openclaw-bootstrap
 RUN chmod +x /usr/local/bin/openclaw-bootstrap
 
+# Runtime payloads baked into the image so bootstrap can restore them onto /data
+# on every boot. This is what makes the Shopify layer survive a redeploy, an
+# OpenClaw upgrade that rewrites workspaces, or a lost volume. Secrets are NEVER
+# baked in — tokens live only in /data/.openclaw/credentials/shopify/tokens.env
+# (or Railway variables). See manifest.json -> provisioned.
+COPY payloads /app/payloads
+RUN chmod +x /app/payloads/shopify/bin/*
+
 # The wrapper listens on $PORT.
 # IMPORTANT: Do not set a default PORT here.
 # Railway injects PORT at runtime and routes traffic to that port.
