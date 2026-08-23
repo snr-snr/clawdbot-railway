@@ -97,12 +97,13 @@ COPY bootstrap.sh /usr/local/bin/openclaw-bootstrap
 RUN chmod +x /usr/local/bin/openclaw-bootstrap
 
 # Runtime payloads baked into the image so bootstrap can restore them onto /data
-# on every boot. This is what makes the Shopify layer survive a redeploy, an
-# OpenClaw upgrade that rewrites workspaces, or a lost volume. Secrets are NEVER
-# baked in — tokens live only in /data/.openclaw/credentials/shopify/tokens.env
-# (or Railway variables). See manifest.json -> provisioned.
+# on every boot. This is what makes the Shopify and Granola layers survive a
+# redeploy, an OpenClaw upgrade that rewrites workspaces, or a lost volume.
+# Secrets are NEVER baked in — tokens live only under
+# /data/.openclaw/credentials/<name>/ (or Railway variables).
+# See manifest.json -> provisioned.
 COPY payloads /app/payloads
-RUN chmod +x /app/payloads/shopify/bin/*
+RUN chmod +x /app/payloads/*/bin/*
 
 # 1Password CLI — lets bootstrap resolve secrets from a service-account vault at
 # boot instead of keeping them in plaintext on /data. Needs >= 2.18 for service

@@ -25,6 +25,21 @@
       "from": "/app/config/mcporter.json",
       "to": "/data/.openclaw/mcporter.json",
       "description": "Default mcporter config path expected by /app — points at persistent copy"
+    },
+    {
+      "from": "/usr/local/bin/granola",
+      "to": "/data/npm/bin/granola",
+      "description": "The agent Bash tool runs with a SANITISED PATH that excludes /data/npm/bin — only /usr/local/{s}bin, /usr/{s}bin and /{s}bin. Without this link an agent calling `granola` gets 'command not found' (exit 127) and has to recover by guessing the absolute path. /usr/local/bin is in the image, so the link is recreated on every boot; the target lives on /data."
+    },
+    {
+      "from": "/usr/local/bin/shopify-admin",
+      "to": "/data/npm/bin/shopify-admin",
+      "description": "Same sanitised-PATH problem as granola above."
+    },
+    {
+      "from": "/usr/local/bin/ntn",
+      "to": "/data/npm/bin/ntn",
+      "description": "Notion CLI (npm `ntn`), used by the built-in `notion` skill. Same sanitised-PATH problem as granola above — and /usr/local/bin lives in the image, so without this the link is lost on every redeploy even though the CLI itself persists on /data."
     }
   ],
 
@@ -44,6 +59,13 @@
         "ref": "op://Automation - OpenClaw/Shopify Bazaa/credential",
         "dest": "env_file",
         "path": "/data/.openclaw/credentials/shopify/tokens.env",
+        "mode": "600"
+      },
+      {
+        "name": "GRANOLA_API_KEY",
+        "ref": "op://Automation - OpenClaw/Granola API Key OpenClaw/credential",
+        "dest": "env_file",
+        "path": "/data/.openclaw/credentials/granola/token.env",
         "mode": "600"
       }
     ]
@@ -77,6 +99,32 @@
         }
       ],
       "assert_store_tokens": true
+    },
+    {
+      "name": "granola",
+      "description": "Granola meeting notes: the `granola` CLI (public-api.granola.ai, read-only) + the `granola` skill, restored onto /data from the image on every boot. The API key is NOT provisioned — it lives only in /data/.openclaw/credentials/granola/token.env (0600), seeded from 1Password when a service-account token is present.",
+      "binaries": [
+        {
+          "src": "/app/payloads/granola/bin/granola",
+          "dest": "/data/npm/bin/granola",
+          "mode": "755"
+        }
+      ],
+      "agent_skill": {
+        "skill_name": "granola",
+        "src": "/app/payloads/granola/skill",
+        "agents": [
+          "main", "bdm", "growth-marketing", "accountant",
+          "automation-expert", "legal", "marketing"
+        ]
+      },
+      "ensure_dirs": [
+        { "path": "/data/.openclaw/credentials/granola", "mode": "700" }
+      ],
+      "assert_env_file": {
+        "path": "/data/.openclaw/credentials/granola/token.env",
+        "keys": ["GRANOLA_API_KEY"]
+      }
     }
   ],
 
@@ -85,7 +133,7 @@
       "node", "npm", "pnpm", "openclaw",
       "jq", "rg", "ffmpeg", "zip", "unzip", "git", "curl",
       "convert", "pdftotext",
-      "mcporter", "gws",
+      "mcporter", "gws", "ntn",
       "google-ads-mcp", "attio-mcp-server"
     ],
     "required_files": [

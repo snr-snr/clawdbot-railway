@@ -1,0 +1,436 @@
+#!/usr/bin/env node
+/**
+ * granola — Granola public API CLI for OpenClaw agents.
+ *
+ * Zero dependencies (node >= 18, uses global fetch).
+ *
+ * Token : /data/.openclaw/credentials/granola/token.env   (chmod 600)
+ *         key GRANOLA_API_KEY, or the same name in the environment.
+ *
+ * The API is READ-ONLY: notes, transcripts and folders. It only returns notes
+ * that already have a generated AI summary + transcript.
+ *
+ * The key is never printed. All output is redacted for grn_ patterns before
+ * it reaches stdout/stderr.
+ */
+
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+const CRED_DIR =
+  process.env.GRANOLA_CRED_DIR || '/data/.openclaw/credentials/granola';
+const TOKEN_FILE =
+  process.env.GRANOLA_TOKEN_ENV || path.join(CRED_DIR, 'token.env');
+
+const API_BASE = process.env.GRANOLA_API_BASE || 'https://public-api.granola.ai';
+const MAX_RETRIES = 5;
+
+// Granola rate limits: 25 requests / 5s burst, 5 req/s sustained. 250ms between
+// paged calls keeps us at 4/s — comfortably inside both.
+const PAGE_DELAY_MS = 250;
+
+// Server-side caps from the OpenAPI spec.
+const NOTES_PAGE_MAX = 30;
+const TRANSCRIPT_PAGE_MAX = 100;
+
+// ---------------------------------------------------------------- redaction
+
+const SECRET_RE = /\bgrn_[A-Za-z0-9_-]+/g;
+
+function redact(s) {
+  return String(s).replace(SECRET_RE, 'grn_***[redacted]');
+}
+function out(s) {
+  process.stdout.write(redact(s) + '\n');
+}
+function err(s) {
+  process.stderr.write(redact(s) + '\n');
+}
+// Progress goes to stderr, which the OpenClaw agent harness treats as a failed
+// command — so it is opt-in via --verbose and silent by default.
+let VERBOSE = false;
+function progress(s) {
+  if (VERBOSE) err(s);
+}
+function die(msg, code = 1) {
+  err('error: ' + msg);
+  process.exit(code);
+}
+function json(v) {
+  out(JSON.stringify(v, null, 2));
+}
+
+// ------------------------------------------------------------------- token
+
+function loadTokenFile() {
+  const vars = {};
+  if (fs.existsSync(TOKEN_FILE)) {
+    for (const raw of fs.readFileSync(TOKEN_FILE, 'utf8').split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const i = line.indexOf('=');
+      if (i === -1) continue;
+      vars[line.slice(0, i).trim()] = line
+        .slice(i + 1)
+        .trim()
+        .replace(/^["']|["']$/g, '');
+    }
+  }
+  return vars;
+}
+
+function resolveToken() {
+  const token = process.env.GRANOLA_API_KEY || loadTokenFile().GRANOLA_API_KEY;
+  if (!token) {
+    die(
+      `no API key — expected GRANOLA_API_KEY in ${TOKEN_FILE} or the environment.\n` +
+        `       Mint one in the Granola desktop app: Settings → Connectors → API keys.`
+    );
+  }
+  if (!token.startsWith('grn_')) {
+    progress(`warning: GRANOLA_API_KEY does not start with "grn_" — is it the right key?`);
+  }
+  return token;
+}
+
+// -------------------------------------------------------------------- HTTP
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function request(apiPath, query) {
+  const token = resolveToken();
+  const url = new URL(apiPath, API_BASE);
+  for (const [k, v] of Object.entries(query || {})) {
+    if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
+  }
+
+  let attempt = 0;
+  for (;;) {
+    attempt++;
+    let res;
+    try {
+      res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+      });
+    } catch (e) {
+      if (attempt > MAX_RETRIES) die(`network failure: ${e.message}`);
+      await sleep(1000 * attempt);
+      continue;
+    }
+
+    const text = await res.text();
+    let body = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      /* non-JSON body — handled below */
+    }
+
+    if (res.status === 429) {
+      if (attempt > MAX_RETRIES) die('rate limited by Granola after retries');
+      const retryAfter = Number(res.headers.get('retry-after'));
+      const wait =
+        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000 * attempt;
+      progress(`[rate limited] waiting ${wait}ms (attempt ${attempt}/${MAX_RETRIES})`);
+      await sleep(wait);
+      continue;
+    }
+
+    if (res.status >= 500) {
+      if (attempt > MAX_RETRIES) die(`Granola ${res.status}: ${text.slice(0, 400)}`);
+      await sleep(1000 * attempt);
+      continue;
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      die(
+        `Granola ${res.status} — the API key is invalid, revoked, or lacks the ` +
+          `scope for this resource (personal vs public notes).`
+      );
+    }
+
+    if (res.status === 404) {
+      die(
+        `Granola 404 for ${url.pathname} — no such note/folder, or the note has ` +
+          `no AI summary yet (the API only exposes summarised notes).`
+      );
+    }
+
+    if (!res.ok) die(`Granola ${res.status}: ${text.slice(0, 800)}`);
+    if (body === null) die(`non-JSON response from Granola: ${text.slice(0, 400)}`);
+    return body;
+  }
+}
+
+/** Walk a cursor-paginated endpoint, collecting `key` from each page. */
+async function paginate(apiPath, query, key, { max = Infinity, pageMax } = {}) {
+  const items = [];
+  let cursor;
+  let page = 0;
+
+  for (;;) {
+    page++;
+    const remaining = max - items.length;
+    const pageSize = Math.min(pageMax, remaining === Infinity ? pageMax : remaining);
+    const body = await request(apiPath, { ...query, cursor, page_size: pageSize });
+    const batch = body[key];
+    if (!Array.isArray(batch)) die(`response has no "${key}" array`);
+
+    for (const item of batch) {
+      if (items.length >= max) break;
+      items.push(item);
+    }
+    progress(`[page ${page}] +${batch.length} (total ${items.length})`);
+
+    if (!body.hasMore || !body.cursor || items.length >= max) break;
+    cursor = body.cursor;
+    await sleep(PAGE_DELAY_MS);
+  }
+  return items;
+}
+
+// --------------------------------------------------------------- utilities
+
+function parseFlags(argv) {
+  const flags = {};
+  const rest = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      if (eq !== -1) flags[a.slice(2, eq)] = a.slice(eq + 1);
+      else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('--'))
+        flags[a.slice(2)] = argv[++i];
+      else flags[a.slice(2)] = true;
+    } else rest.push(a);
+  }
+  return { flags, rest };
+}
+
+/**
+ * Accepts an ISO date/date-time, or a relative shorthand like `7d`, `12h`,
+ * `4w`. Relative values are resolved against now, in UTC.
+ */
+function resolveDate(value, label) {
+  if (value === undefined || value === true) return undefined;
+  const s = String(value).trim();
+  const rel = /^(\d+)\s*([hdwm])$/i.exec(s);
+  if (rel) {
+    const n = Number(rel[1]);
+    const unit = rel[2].toLowerCase();
+    const ms = { h: 3600e3, d: 86400e3, w: 7 * 86400e3, m: 30 * 86400e3 }[unit];
+    return new Date(Date.now() - n * ms).toISOString();
+  }
+  if (Number.isNaN(Date.parse(s))) {
+    die(`${label} is not a date or a relative shorthand like 7d/12h/4w: "${s}"`);
+  }
+  return s;
+}
+
+function noteLine(n) {
+  return {
+    id: n.id,
+    title: n.title,
+    created_at: n.created_at,
+    owner: n.owner && n.owner.email,
+  };
+}
+
+function transcriptToText(items) {
+  return items
+    .map((t) => {
+      const sp = t.speaker || {};
+      const who =
+        sp.name || sp.diarization_label || (sp.attribution === 'me' ? 'Me' : 'Them');
+      return `[${t.start_time}] ${who}: ${t.text}`;
+    })
+    .join('\n');
+}
+
+// ---------------------------------------------------------------- commands
+
+const USAGE = `granola — Granola meeting notes for OpenClaw agents (read-only)
+
+USAGE
+  granola whoami
+  granola notes    [--since 7d] [--until <date>] [--updated-since <date>]
+                   [--folder fol_...] [--limit N] [--full]
+  granola note     <not_...> [--transcript] [--markdown]
+  granola transcript <not_...> [--text] [--limit N]
+  granola folders  [--limit N]
+  granola search   <term...> [--since 30d] [--limit N] [--deep] [--scan N]
+
+  --verbose on any command logs paging progress to stderr.
+
+EXAMPLES
+  granola notes --since 7d
+  granola notes --since 2026-08-01 --until 2026-08-15 --limit 50
+  granola note not_1d3tmYTlCICgjy --markdown
+  granola transcript not_1d3tmYTlCICgjy --text
+  granola search "pricing" --since 30d --deep
+
+DATES
+  --since / --until / --updated-since accept an ISO date (2026-08-01), an ISO
+  date-time, or a relative shorthand: 12h, 7d, 4w, 3m.
+
+SEARCH
+  The API has no server-side search. \`search\` lists notes in the window and
+  greps them: titles only by default, or titles + AI summaries with --deep
+  (one extra request per note — use --scan to cap how many are fetched,
+  default 50).
+
+NOTES
+  Only notes that already have an AI summary + transcript are exposed.
+  \`notes\` returns id/title/created_at/owner; add --full to fetch each note's
+  detail (one request per note).
+  The API key is never printed; output is redacted.
+  Only errors go to stderr, so a clean run stays quiet — add --verbose for
+  paging progress.`;
+
+async function cmdWhoami() {
+  const body = await request('/v1/notes', { page_size: 1 });
+  const first = (body.notes || [])[0];
+  json({
+    ok: true,
+    api_base: API_BASE,
+    key_source: process.env.GRANOLA_API_KEY ? 'environment' : TOKEN_FILE,
+    notes_visible: Boolean(first),
+    most_recent_note: first ? noteLine(first) : null,
+  });
+}
+
+async function fetchNotes(flags) {
+  const query = {
+    created_after: resolveDate(flags.since, '--since'),
+    created_before: resolveDate(flags.until, '--until'),
+    updated_after: resolveDate(flags['updated-since'], '--updated-since'),
+    folder_id: typeof flags.folder === 'string' ? flags.folder : undefined,
+  };
+  const max = Number(flags.limit) || 50;
+  return paginate('/v1/notes', query, 'notes', { max, pageMax: NOTES_PAGE_MAX });
+}
+
+async function cmdNotes(flags) {
+  const notes = await fetchNotes(flags);
+  if (!flags.full) return json(notes.map(noteLine));
+
+  const detailed = [];
+  for (const n of notes) {
+    detailed.push(await request(`/v1/notes/${n.id}`));
+    await sleep(PAGE_DELAY_MS);
+  }
+  json(detailed);
+}
+
+async function cmdNote(id, flags) {
+  if (!id) die('note requires a note id (not_...)');
+  const note = await request(`/v1/notes/${id}`, {
+    include: flags.transcript ? 'transcript' : undefined,
+  });
+  if (flags.markdown) {
+    const md = note.summary_markdown || note.summary_text;
+    if (!md) die(`note ${id} has no summary`);
+    out(`# ${note.title || '(untitled)'}\n\n${md}`);
+    return;
+  }
+  json(note);
+}
+
+async function cmdTranscript(id, flags) {
+  if (!id) die('transcript requires a note id (not_...)');
+  const items = await paginate(`/v1/notes/${id}/transcript`, {}, 'transcript', {
+    max: Number(flags.limit) || Infinity,
+    pageMax: TRANSCRIPT_PAGE_MAX,
+  });
+  if (flags.text) return out(transcriptToText(items));
+  json(items);
+}
+
+async function cmdFolders(flags) {
+  const folders = await paginate('/v1/folders', {}, 'folders', {
+    max: Number(flags.limit) || 100,
+    pageMax: NOTES_PAGE_MAX,
+  });
+  json(folders);
+}
+
+async function cmdSearch(terms, flags) {
+  if (!terms.length) die('search requires at least one term');
+  const needles = terms.map((t) => t.toLowerCase());
+  const matches = (hay) => {
+    const s = String(hay || '').toLowerCase();
+    return needles.every((n) => s.includes(n));
+  };
+
+  const notes = await fetchNotes({ ...flags, since: flags.since || '30d', limit: flags.scan || 50 });
+  const limit = Number(flags.limit) || 20;
+  const hits = [];
+
+  for (const n of notes) {
+    if (hits.length >= limit) break;
+    if (matches(n.title)) {
+      hits.push({ ...noteLine(n), matched: 'title' });
+      continue;
+    }
+    if (!flags.deep) continue;
+
+    const detail = await request(`/v1/notes/${n.id}`);
+    await sleep(PAGE_DELAY_MS);
+    const summary = detail.summary_markdown || detail.summary_text || '';
+    if (matches(summary)) {
+      hits.push({
+        ...noteLine(n),
+        matched: 'summary',
+        web_url: detail.web_url,
+        excerpt: excerpt(summary, needles[0]),
+      });
+    }
+  }
+
+  progress(`[search] scanned ${notes.length} notes, ${hits.length} hit(s)`);
+  json(hits);
+}
+
+function excerpt(text, needle, radius = 160) {
+  const i = text.toLowerCase().indexOf(needle);
+  if (i === -1) return text.slice(0, radius * 2);
+  const start = Math.max(0, i - radius);
+  return (start ? '…' : '') + text.slice(start, i + radius) + '…';
+}
+
+// -------------------------------------------------------------------- main
+
+async function main() {
+  const { flags, rest } = parseFlags(process.argv.slice(2));
+  VERBOSE = Boolean(flags.verbose);
+  const cmd = rest[0];
+
+  if (!cmd || cmd === 'help' || flags.help) {
+    out(USAGE);
+    return;
+  }
+
+  switch (cmd) {
+    case 'whoami':
+      return cmdWhoami();
+    case 'notes':
+      return cmdNotes(flags);
+    case 'note':
+      return cmdNote(rest[1], flags);
+    case 'transcript':
+      return cmdTranscript(rest[1], flags);
+    case 'folders':
+      return cmdFolders(flags);
+    case 'search':
+      return cmdSearch(rest.slice(1), flags);
+    default:
+      die(`unknown command "${cmd}"\n\n${USAGE}`);
+  }
+}
+
+main().catch((e) => die(e && e.stack ? e.stack : String(e)));

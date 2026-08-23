@@ -263,6 +263,17 @@ while read -r prov; do
                "$reg" 2>/dev/null)
     fi
   fi
+
+  # -- generic credential check: keys expected in an env-file (or the environment)
+  envf=$(echo "$prov" | jq -r '.assert_env_file.path // empty')
+  if [ -n "$envf" ]; then
+    while read -r k; do
+      [ -z "$k" ] && continue
+      if ! grep -q "^${k}=." "$envf" 2>/dev/null && [ -z "${!k:-}" ]; then
+        warnings+=("provision $pname: $k missing from $envf and the environment")
+      fi
+    done < <(echo "$prov" | jq -r '.assert_env_file.keys[]?')
+  fi
 done < <(jq -c '.provisioned[]?' "$MANIFEST")
 
 # ---------------------------------------------------------------------------
