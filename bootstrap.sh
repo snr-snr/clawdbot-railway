@@ -165,14 +165,24 @@ done < <(jq -c '.symlinks[]?' "$MANIFEST")
 # ---------------------------------------------------------------------------
 CFG=/data/.openclaw/openclaw.json
 
+# 2026.8.1 moved the roster from agents.list (array) to agents.entries (object
+# keyed by agent id); openclaw doctor migrates it, and config validate warns
+# until it does. Both shapes are live in the wild, so every read of the roster
+# goes through this jq helper, which normalises either one to an array of agent
+# objects carrying .id. Without it the assertions below see zero agents after a
+# migration and fail the deploy fatally — crash-looping a perfectly good box.
+JQ_AGENTS='def agent_list: if ((.agents.entries? | type) == "object")
+  then (.agents.entries | to_entries | map(.value + {id: .key}))
+  else (.agents.list // []) end; '
+
 # Resolve an agent's workspace, honouring the agents.defaults.workspace
 # fallback (that is how "main" resolves to /data/workspace).
 agent_workspace() {
   local id="$1"
   [ -f "$CFG" ] || return 1
-  jq -r --arg id "$id" '
+  jq -r --arg id "$id" "$JQ_AGENTS"'
     (.agents.defaults.workspace // "/data/workspace") as $def
-    | (.agents.list[]? | select(.id==$id) | (.workspace // .cwd // $def))
+    | (agent_list[]? | select(.id==$id) | (.workspace // .cwd // $def))
   ' "$CFG" 2>/dev/null | head -1
 }
 
@@ -239,7 +249,7 @@ while read -r prov; do
         # The skill is useless unless the agent lists it. We do not write config,
         # so surface the drift instead.
         if ! jq -e --arg id "$aid" --arg s "$skill_name" \
-             '.agents.list[] | select(.id==$id) | .skills // [] | index($s)' \
+             "$JQ_AGENTS"'agent_list[] | select(.id==$id) | .skills // [] | index($s)' \
              "$CFG" >/dev/null 2>&1; then
           warnings+=("agent $aid does not list skill '$skill_name' in openclaw.json")
         fi
@@ -385,14 +395,14 @@ done < <(jq -r '.assertions.required_files[]?' "$MANIFEST")
 cfg_errors=()
 if [ -f /data/.openclaw/openclaw.json ]; then
   expected_min=$(jq -r '.assertions.openclaw_config.min_agents // 0' "$MANIFEST")
-  actual_agents=$(jq -r '.agents.list | length' /data/.openclaw/openclaw.json 2>/dev/null || echo 0)
+  actual_agents=$(jq -r "$JQ_AGENTS"'agent_list | length' /data/.openclaw/openclaw.json 2>/dev/null || echo 0)
   if [ "$actual_agents" -lt "$expected_min" ]; then
     cfg_errors+=("agent count $actual_agents < expected $expected_min")
   fi
 
   while read -r required_id; do
     [ -z "$required_id" ] && continue
-    if ! jq -e --arg id "$required_id" '.agents.list[] | select(.id==$id)' \
+    if ! jq -e --arg id "$required_id" "$JQ_AGENTS"'agent_list[] | select(.id==$id)' \
          /data/.openclaw/openclaw.json >/dev/null 2>&1; then
       cfg_errors+=("missing agent: $required_id")
     fi
