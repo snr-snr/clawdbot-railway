@@ -27,6 +27,16 @@
       "description": "Default mcporter config path expected by /app — points at persistent copy"
     },
     {
+      "from": "/usr/local/bin/mcporter",
+      "to": "/data/.openclaw/bin/mcporter",
+      "description": "Same sanitised-PATH problem as granola below, and this one was silently breaking automations: the mcporter wrapper lives in /data/.openclaw/bin (not /data/npm/bin), which is also off the agent Bash PATH. Both the bdm Attio and growth-marketing Google Ads cron jobs failed every run with 'Bash failed: mcporter list <server> --schema' until this link existed."
+    },
+    {
+      "from": "/usr/local/bin/gws",
+      "to": "/data/.openclaw/bin/gws",
+      "description": "Google Workspace CLI wrapper (injects the service-account credentials path). Backs the gws-shared/gws-docs/gws-docs-write/gws-drive/gws-drive-upload skills on main, bdm and growth-marketing — all of which were unreachable from the agent Bash tool without this link."
+    },
+    {
       "from": "/usr/local/bin/granola",
       "to": "/data/npm/bin/granola",
       "description": "The agent Bash tool runs with a SANITISED PATH that excludes /data/npm/bin — only /usr/local/{s}bin, /usr/{s}bin and /{s}bin. Without this link an agent calling `granola` gets 'command not found' (exit 127) and has to recover by guessing the absolute path. /usr/local/bin is in the image, so the link is recreated on every boot; the target lives on /data."
@@ -154,11 +164,12 @@
   },
 
   "snapshot": {
-    "$comment": "Tar.gz to /data/snapshots/preboot-${commit}.tar.gz before each deploy. Keep last N.",
+    "$comment": "Tar.gz to /data/snapshots/preboot-${commit}.tar.gz before each deploy. Keep last N. /data/.openclaw/state holds openclaw.sqlite (cron jobs, sessions, credential store) since 2026.7.1 migrated them out of the JSON files — it is the snapshot that actually matters for rollback. cron/jobs.json is retained for pre-2026.7.1 installs and is normally jobs.json.migrated now.",
     "paths": [
       "/data/.openclaw/openclaw.json",
       "/data/.openclaw/mcporter.json",
       "/data/.openclaw/cron/jobs.json",
+      "/data/.openclaw/state",
       "/data/.openclaw/credentials",
       "/data/.openclaw/custom-skills",
       "/data/.openclaw/gws-skills",
