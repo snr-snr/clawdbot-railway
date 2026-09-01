@@ -23,7 +23,7 @@ WORKDIR /openclaw
 # Pin to a known-good ref (tag/branch). This is the SOURCE OF TRUTH for the OpenClaw version
 # (the Railway OPENCLAW_GIT_REF variable override was removed 2026-08-05). Bump via PR + merge.
 # Using a released tag avoids build breakage when `main` temporarily references unpublished packages.
-ARG OPENCLAW_GIT_REF=v2026.7.1-2
+ARG OPENCLAW_GIT_REF=v2026.8.1
 RUN git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" https://github.com/openclaw/openclaw.git .
 
 # Patch: relax version requirements for packages that may reference unpublished versions.
