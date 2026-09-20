@@ -257,6 +257,37 @@ while read -r prov; do
     fi
   fi
 
+  # -- workspace files, copied into agents' workspaces and OVERWRITTEN on every
+  #    boot (operator-owned context, e.g. the shared environment facts that the
+  #    bootstrap-extra-files hook injects). agents: "*" = the whole live roster,
+  #    so an agent created at runtime is covered on the next boot with no edit here.
+  while read -r wf; do
+    [ -z "$wf" ] && continue
+    wsrc=$(echo "$wf" | jq -r '.src'); wrel=$(echo "$wf" | jq -r '.dest_rel')
+    if [ ! -f "$wsrc" ]; then
+      warnings+=("provision $pname: payload missing in image: $wsrc"); continue
+    fi
+    case "$wrel" in ""|/*|*..*) warnings+=("provision $pname: bad dest_rel '$wrel'"); continue ;; esac
+    if [ "$(echo "$wf" | jq -r '.agents | type')" = "array" ]; then
+      wagents=$(echo "$wf" | jq -r '.agents[]')
+    else
+      wagents=$(jq -r "$JQ_AGENTS"'agent_list[]?.id' "$CFG" 2>/dev/null)
+    fi
+    while read -r aid; do
+      [ -z "$aid" ] && continue
+      ws=$(agent_workspace "$aid")
+      if [ -z "$ws" ] || [ "$ws" = "null" ] || [ ! -d "$ws" ]; then
+        warnings+=("provision $pname: no workspace dir for agent $aid"); continue
+      fi
+      if ! cmp -s "$wsrc" "$ws/$wrel" 2>/dev/null; then
+        mkdir -p "$(dirname "$ws/$wrel")"
+        install -m 644 "$wsrc" "$ws/$wrel"
+        actions+=("provision $pname: $ws/$wrel")
+        log "provision $pname: $ws/$wrel"
+      fi
+    done <<< "$wagents"
+  done < <(echo "$prov" | jq -c '.workspace_files[]?')
+
   # -- credentials present? (tokens are never baked into the image)
   if [ "$(echo "$prov" | jq -r '.assert_store_tokens // false')" = "true" ]; then
     reg=/data/.openclaw/credentials/shopify/stores.json

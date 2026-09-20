@@ -83,6 +83,24 @@
 
   "provisioned": [
     {
+      "name": "environment",
+      "description": "Shared environment facts for EVERY agent (what persists, where to install, shell gotchas, off-limits paths). Copied into <workspace>/env/AGENTS.md for the whole live roster and overwritten on every boot; injected into every turn by the bootstrap-extra-files hook (hooks.internal.entries in openclaw.json, paths [\"env/AGENTS.md\"] - runtime config, not written here). The basename must stay AGENTS.md and the file must stay inside the workspace, or the hook ignores it.",
+      "ensure_dirs": [
+        { "path": "/data/bin", "mode": "755" },
+        { "path": "/data/venvs", "mode": "755" }
+      ],
+      "seed_files": [
+        {
+          "src": "/app/payloads/environment/install-requests.md",
+          "dest": "/data/.openclaw/install-requests.md",
+          "mode": "644"
+        }
+      ],
+      "workspace_files": [
+        { "src": "/app/payloads/environment/AGENTS.md", "dest_rel": "env/AGENTS.md", "agents": "*" }
+      ]
+    },
+    {
       "name": "shopify",
       "description": "Client Shopify store access: shopify-admin CLI + the `shopify` skill, restored onto /data from the image on every boot so a redeploy, upgrade or lost volume cannot drop it. Tokens are NOT provisioned — they live only in /data/.openclaw/credentials/shopify/tokens.env (0600) or Railway variables.",
       "binaries": [
