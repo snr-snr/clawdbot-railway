@@ -461,6 +461,34 @@ if [ "${#errors[@]}" -gt 0 ]; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# 7b. Background services (fail-soft, opt-in by on-volume state)
+#
+# There is no systemd here, so a helper daemon dies with every container and
+# nothing restarts it. Each manifest .services[] entry is started detached, only
+# when its `only_if_exists` path is present on /data (i.e. someone deliberately
+# set it up at runtime) and it is not already running. Never fatal: a broken
+# helper must not take the bot down. tini (PID 1) adopts and reaps the child
+# after the exec below.
+# ---------------------------------------------------------------------------
+while read -r svc; do
+  [ -z "$svc" ] && continue
+  sname=$(echo "$svc" | jq -r '.name'); sbin=$(echo "$svc" | jq -r '.bin')
+  sgate=$(echo "$svc" | jq -r '.only_if_exists // empty'); slog=$(echo "$svc" | jq -r '.log // "/dev/null"')
+  if [ -n "$sgate" ] && [ ! -e "$sgate" ]; then continue; fi
+  if [ ! -x "$sbin" ]; then warnings+=("service $sname: $sbin not executable"); continue; fi
+  if pgrep -f "^$sbin( |\$)" >/dev/null 2>&1; then continue; fi
+  mapfile -t sargs < <(echo "$svc" | jq -r '.args[]?')
+  rm -f "$(echo "$svc" | jq -r '.stale_socket // empty')" 2>/dev/null
+  mkdir -p "$(dirname "$slog")" 2>/dev/null
+  if setsid "$sbin" "${sargs[@]}" >"$slog" 2>&1 < /dev/null & then
+    actions+=("service $sname: started")
+    log "service $sname: started ($sbin)"
+  else
+    warnings+=("service $sname: failed to start")
+  fi
+done < <(jq -c '.services[]?' "$MANIFEST" 2>/dev/null)
+
 write_report "ok"
 log "reconcile complete: ${#actions[@]} action(s), ${#warnings[@]} warning(s), 0 error(s)"
 

@@ -116,6 +116,20 @@ RUN curl -sSfLo /tmp/op.zip \
   && rm -f /tmp/op.zip \
   && op --version
 
+# Tailscale (userspace-networking only: Railway has no /dev/net/tun or NET_ADMIN).
+# Used by the network-admin agent to reach Simon's home network. Pinned + checksum
+# verified; static Go binaries, no apt repo. State lives on the volume at
+# /data/tailscale; bootstrap starts tailscaled only when that state already exists
+# (see manifest.json -> services), so this is inert on a box that never joined a tailnet.
+ARG TAILSCALE_VERSION=1.102.4
+ARG TAILSCALE_SHA256=50748df1045e60b5b695f19f4c56b0da36c019948b440fb456b6584a50f0d8b9
+RUN curl -sSfLo /tmp/ts.tgz "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz" \
+  && echo "${TAILSCALE_SHA256}  /tmp/ts.tgz" | sha256sum -c - \
+  && tar -xzf /tmp/ts.tgz -C /tmp \
+  && install -m 755 "/tmp/tailscale_${TAILSCALE_VERSION}_amd64/tailscale" "/tmp/tailscale_${TAILSCALE_VERSION}_amd64/tailscaled" /usr/local/bin/ \
+  && rm -rf /tmp/ts.tgz "/tmp/tailscale_${TAILSCALE_VERSION}_amd64" \
+  && tailscale version
+
 # The wrapper listens on $PORT.
 # IMPORTANT: Do not set a default PORT here.
 # Railway injects PORT at runtime and routes traffic to that port.

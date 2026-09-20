@@ -81,6 +81,23 @@
     ]
   },
 
+  "services": [
+    {
+      "name": "tailscaled",
+      "$comment": "Userspace-networking Tailscale for the network-admin agent (home NAS/UniFi access). Started ONLY if the node has already joined a tailnet (state file on the volume). Reach peers via the SOCKS5/HTTP proxy on localhost:1055 or `tailscale nc`; there is no routable interface. CLI: tailscale --socket=/data/tailscale/tailscaled.sock ...",
+      "bin": "/usr/local/bin/tailscaled",
+      "args": [
+        "--tun=userspace-networking",
+        "--statedir=/data/tailscale",
+        "--socket=/data/tailscale/tailscaled.sock",
+        "--socks5-server=localhost:1055",
+        "--outbound-http-proxy-listen=localhost:1055"
+      ],
+      "only_if_exists": "/data/tailscale/tailscaled.state",
+      "stale_socket": "/data/tailscale/tailscaled.sock",
+      "log": "/data/tailscale/tailscaled.log"
+    }
+  ],
   "provisioned": [
     {
       "name": "environment",
