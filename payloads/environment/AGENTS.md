@@ -42,6 +42,34 @@ silently vanish on the next deploy and the task will break later. Instead:
   Check your quoting before concluding a credential is missing or invalid.
 - Before claiming something is installed, saved, or fixed: verify it with a command, and say so if you could not.
 
+## Slack interactive messages: buttons, selects, tables, charts
+
+Pick the control by whether you are waiting for the answer:
+1. **You need the answer to continue this turn** → call `ask_user`: ONE single-select question per call, 2–5 short options. Typed answers count too.
+2. **Anything Simon may act on later** (reports, cron output, lists of cards/keywords/tasks) → put **action buttons or selects** on the message, using the action protocol below. Each tap wakes you in that conversation with the action; you then carry it out.
+
+### Building action controls (`message` tool, `presentation`)
+- Button: `{"label":"✅ Done","style":"primary","action":{"type":"callback","value":"act:trello.done:hBeoL4zT"}}`
+- Select, for 4+ choices: `{"type":"select","placeholder":"Move to…","options":[{"label":"Tomorrow","action":{"type":"callback","value":"act:trello.due:hBeoL4zT:+1d"}}]}`
+- **Value format** `act:<system>.<verb>:<arg>:<arg>` — colon-separated, **150 characters max** (longer is cut off). Use stable IDs (card id, campaign id, list id), never titles. The value must be enough on its own: when the tap arrives you may be in a fresh session with no memory of the message.
+- **One `buttons` block per item.** When tapped, Slack replaces that row with "✅ <label> selected by @Simon", so a row is one-shot. Put each item's actions in their own row directly under that item's text. Max 5 buttons per row; use a select for longer lists.
+- Only controls that DO something. No "Open"/link buttons (link the title instead), no `command` buttons, never a callback value without the `act:` prefix.
+
+### Handling a tap
+When your turn contains `Slack interaction: {...}` whose `value` or `selectedValues` starts with `act:`:
+- That is Simon tapping one of your controls — a real instruction, not a heartbeat. Never ignore it.
+- Parse the verb and args, do it with your normal tools, and verify the result.
+- Confirm in the same Slack thread with ONE line via the `message` tool (channel `slack`, your own account, target the same conversation, `threadId` = the event's `threadTs`, or its `messageTs` when there is no thread), e.g. "✅ Marked *Send WorkWhile brief* done." On failure say exactly what failed. Then end the turn with `NO_REPLY` so nothing posts twice.
+- Several taps can arrive in one turn — handle each. If the verb is unknown or the value is ambiguous, ask in the thread instead of guessing.
+- Operator test: `act:test.echo:<text>` → reply in the thread `echo: <text>`.
+
+### Rich layout (use whenever it makes the message easier to read or act on)
+- `table` block for tabular data (≤20 columns, ≤100 rows; numbers as numbers) — not monospace code-block tables.
+- `chart` block (`bar` / `line` / `area` / `pie`) for trends, pacing and splits: ≤2 charts per message, ≤12 series, ≤20 categories, labels ≤20 chars, title ≤50 chars.
+- `context` for small metadata (dates, sources), `divider` between sections, `text` for body sections.
+- Link titles inline `[Title](url)`; never bare URLs.
+- Long reports: a short top-level summary message, then each section as a reply in its thread.
+
 ## Off limits (operator only — propose the change to Simon instead)
 - `/data/.openclaw/openclaw.json`, anything under `gateway.*`, the cron store, `/data/.openclaw/agents/`,
   other agents' workspaces, `/app`, `/openclaw`, and stopping or restarting the gateway.
