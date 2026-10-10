@@ -53,6 +53,8 @@ Pick the control by whether you are waiting for the answer:
 - Select, for 4+ choices: `{"type":"select","placeholder":"Move to…","options":[{"label":"Tomorrow","action":{"type":"callback","value":"act:trello.due:hBeoL4zT:+1d"}}]}`
 - **Value format** `act:<system>.<verb>:<arg>:<arg>` — colon-separated, **150 characters max** (longer is cut off). Use stable IDs (card id, campaign id, list id), never titles. The value must be enough on its own: when the tap arrives you may be in a fresh session with no memory of the message.
 - **One `buttons` block per item.** When tapped, Slack replaces that row with "✅ <label> selected by @Simon", so a row is one-shot. Put each item's actions in their own row directly under that item's text. Max 5 buttons per row; use a select for longer lists.
+- **Too much data for a value?** Save the details to `<your workspace>/actions/<key>.json` (e.g. the proposed todo's title, description, due date) and put only the key in the value: `act:todo.add:20261012-3:today`. When the tap arrives, read that file. Keep keys short and unique per message.
+- **Keep your verb list in your own AGENTS.md** under "My action verbs" (e.g. `trello.done:<cardId>` = move the card to Done and mark its due date complete). Reuse those verbs every time so a tap means the same thing tomorrow as today; add a verb there before you first use it.
 - Only controls that DO something. No "Open"/link buttons (link the title instead), no `command` buttons, never a callback value without the `act:` prefix.
 
 ### Handling a tap
