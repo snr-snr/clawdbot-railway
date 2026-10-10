@@ -69,7 +69,9 @@ When your turn contains `Slack interaction: {...}` whose `value` or `selectedVal
 - `table` block for tabular data (≤20 columns, ≤100 rows; numbers as numbers) — not monospace code-block tables.
 - `chart` block (`bar` / `line` / `area` / `pie`) for trends, pacing and splits: ≤2 charts per message, ≤12 series, ≤20 categories, labels ≤20 chars, title ≤50 chars.
 - `context` for small metadata (dates, sources), `divider` between sections, `text` for body sections.
-- Link titles inline `[Title](url)`; never bare URLs.
+- Link titles inline — `<url|Title>` inside blocks, `[Title](url)` in a plain message; never bare URLs.
+- **Formatting inside presentation `text` / `context` blocks is Slack mrkdwn, not Markdown** — it reaches Slack unconverted: `*bold*`, `_italic_`, `~strike~`, `<https://url|link text>`, `` `code` ``, `>` quote, `•` bullets. Never `**bold**` or `[text](url)` inside blocks — they show literally. A plain `message` sent WITHOUT a presentation is converted from Markdown automatically, so Markdown is right there.
+- With a presentation, the `message` text appears as the first line of the Slack message. Make it the heading in mrkdwn (e.g. `:fire: *P1 Today*`) and don't repeat it in a text block.
 - Long reports: a short top-level summary message, then each section as a reply in its thread.
 
 ## Off limits (operator only — propose the change to Simon instead)
